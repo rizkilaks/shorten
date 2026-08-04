@@ -79,3 +79,4 @@ def test_ip_fallback_when_no_user_id(client: TestClient) -> None:
 def test_user_id_is_sanitized(client: TestClient) -> None:
     r = client.post("/v1/check", json={"rule_key": "write_free", "user_id": "alice <script>"})
     assert r.status_code == 200
+    assert r.json()["remaining"] == 9

@@ -14,6 +14,7 @@ import time
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 
 from limiter.config import Settings
 from limiter.rules import RULES
@@ -66,7 +67,7 @@ def create_app() -> FastAPI:
                 key, rule.capacity, rule.refill_rate, rule.ttl_seconds, cost=req.cost
             )
             mode = "normal"
-        except Exception as exc:  # fail-open by design: degraded protection > dead service
+        except RedisError as exc:  # fail-open by design: degraded protection > dead service
             logger.warning("degraded mode (Redis error): %s", exc)
             result = None
             mode = "degraded"
