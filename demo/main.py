@@ -57,23 +57,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cfg: Settings = request.app.state.settings
 
         try:
-            status, body = await rl.check(
+            status, body, headers = await rl.check(
                 rule_key="write_free" if req.user_id else "ip_write",
                 user_id=req.user_id,
             )
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning("limiter unavailable, failing open: %s", exc)
-            status, body = 200, {"allowed": True}
+            status, body, headers = 200, {"allowed": True}, {}
+        rl_headers = {
+            k: v for k, v in headers.items() if k.lower().startswith("x-ratelimit-")
+        }
 
         if status == 429:
-            retry_after_raw = body.get("retry_after_s")
+            retry_after_raw = body.get("retry_after_s", 1)
             retry_after_s = max(
                 1, int(float(retry_after_raw)) if isinstance(retry_after_raw, (int, str)) else 1
             )
             return JSONResponse(
                 status_code=429,
                 content={"error": "rate_limited", "retry_after_s": retry_after_s},
-                headers={"Retry-After": str(retry_after_s)},
+                headers={"Retry-After": str(retry_after_s), **rl_headers},
             )
         if status >= 500:
             raise HTTPException(status_code=502, detail="limiter unavailable")
@@ -82,12 +85,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for _ in range(MAX_COLLISION_ATTEMPTS):
             code = generate_code()
             if await mem.put(code, str(req.url), req.user_id, created_at):
-                return {
-                    "short_code": code,
-                    "short_url": f"{cfg.base_url}/{code}",
-                    "created_at": created_at,
-                    "hits": 0,
-                }
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "short_code": code,
+                        "short_url": f"{cfg.base_url}/{code}",
+                        "created_at": created_at,
+                        "hits": 0,
+                    },
+                    headers=rl_headers,
+                )
         raise HTTPException(status_code=500, detail="could not allocate a short code")
 
     @app.get("/recent")

@@ -10,16 +10,24 @@ from demo.main import create_app
 
 class StubLimiter:
     def __init__(
-        self, status: int = 200, body: dict | None = None, exc: Exception | None = None
+        self,
+        status: int = 200,
+        body: dict | None = None,
+        exc: Exception | None = None,
+        headers: dict | None = None,
     ) -> None:
         self._status = status
         self._body = body or {"allowed": True, "limit": 10, "remaining": 9, "reset_at": 0}
         self._exc = exc
+        self._headers = headers or {
+            "X-RateLimit-Remaining": "9",
+            "X-RateLimit-Limit": "10",
+        }
 
-    async def check(self, *, rule_key: str, user_id: str | None) -> tuple[int, dict]:
+    async def check(self, *, rule_key: str, user_id: str | None) -> tuple[int, dict, dict]:
         if self._exc is not None:
             raise self._exc
-        return self._status, self._body
+        return self._status, self._body, self._headers
 
     async def aclose(self) -> None:
         pass
@@ -40,6 +48,12 @@ def test_shorten_returns_short_url(client: TestClient) -> None:
     assert len(body["short_code"]) == 6
     assert body["short_url"] == f"http://localhost:8080/{body['short_code']}"
     assert body["hits"] == 0
+
+
+def test_shorten_forwards_rate_limit_headers(client: TestClient) -> None:
+    r = client.post("/shorten", json={"url": "https://example.com/page", "user_id": "demo"})
+    assert r.status_code == 200
+    assert r.headers["X-RateLimit-Remaining"] == "9"
 
 
 def test_redirect_records_a_hit(client: TestClient) -> None:

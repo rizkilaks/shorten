@@ -11,11 +11,11 @@ class LimiterClient:
 
     async def check(
         self, *, rule_key: str, user_id: str | None
-    ) -> tuple[int, dict[str, object]]:
+    ) -> tuple[int, dict[str, object], dict[str, str]]:
         resp = await self._client.post(
             "/v1/check", json={"rule_key": rule_key, "user_id": user_id}
         )
-        return resp.status_code, resp.json()
+        return resp.status_code, resp.json(), dict(resp.headers)
 
     async def aclose(self) -> None:
         await self._client.aclose()
