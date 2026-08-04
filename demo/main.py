@@ -37,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
         await store.init()
         yield
         await limiter.aclose()

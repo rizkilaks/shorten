@@ -1,0 +1,45 @@
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  limiter:
+    build:
+      context: .
+      dockerfile: Dockerfile.limiter
+    environment:
+      LIMITER_REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/v1/health')"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    ports:
+      - "8000:8000"
+
+  demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    environment:
+      DEMO_LIMITER_URL: http://limiter:8000
+      DEMO_BASE_URL: http://localhost:8080
+    depends_on:
+      limiter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/v1/health')"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    ports:
+      - "8080:8080"
