@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shortener + rate limiter</title>
+<style>
+  body { font-family: ui-monospace, Menlo, Consolas, monospace; margin: 2rem auto; max-width: 640px; padding: 0 1rem; }
+  h1 { font-size: 1.25rem; }
+  input, button { font: inherit; padding: 0.5rem; margin: 0.25rem 0; }
+  input[type=url] { width: 100%; }
+  #controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .row { padding: 0.25rem 0; }
+  .ok { color: #1a7f37; }
+  .limited { color: #b35900; }
+  .degraded { color: #9a6700; }
+  .banner { background: #fff8c5; border: 1px solid #d4a72c; padding: 0.5rem; margin: 0.5rem 0; }
+  li { margin: 0.25rem 0; }
+  a { word-break: break-all; }
+  .hits { color: #57606a; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1>shortener + rate limiter</h1>
+  <p>Shorten a URL. Hit <strong>Spam</strong> to watch 200s turn into a 429 banner as the token bucket empties, then recover (~3s per token).</p>
+  <div id="controls">
+    <input id="url" type="url" placeholder="https://example.com/page">
+    <input id="user" value="demo" title="user id (X-User-Id)">
+    <button id="shorten">Shorten</button>
+    <button id="spam">Spam (30x)</button>
+  </div>
+  <div id="banner"></div>
+  <div id="results"></div>
+  <h2>Recent links</h2>
+  <ul id="links"></ul>
+
+<script>
+const urlInput = document.getElementById('url');
+const userInput = document.getElementById('user');
+const banner = document.getElementById('banner');
+const results = document.getElementById('results');
+const linksEl = document.getElementById('links');
+
+async function postShorten() {
+  const body = { url: urlInput.value, user_id: userInput.value || null };
+  const resp = await fetch('/shorten', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await resp.json();
+  return { resp, json };
+}
+
+async function loadRecent() {
+  const r = await fetch('/recent');
+  const { links } = await r.json();
+  linksEl.innerHTML = '';
+  for (const link of links) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = link.short_url;
+    a.textContent = link.short_url;
+    const span = document.createElement('span');
+    span.className = 'hits';
+    span.textContent = ' — ' + link.hits + ' hits';
+    li.appendChild(a);
+    li.appendChild(span);
+    linksEl.appendChild(li);
+  }
+}
+
+function showBanner(text) {
+  banner.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'banner';
+  el.textContent = text;
+  banner.appendChild(el);
+  return el;
+}
+
+function render(index, { resp, json }) {
+  const row = document.createElement('div');
+  row.className = 'row ' + (resp.ok ? 'ok' : 'limited');
+  const remaining = resp.headers.get('X-RateLimit-Remaining');
+  const mode = resp.headers.get('X-RateLimit-Mode');
+  let text = '#' + index + ' ' + resp.status + ' remaining=' + (remaining ?? '-');
+  if (mode === 'degraded') {
+    row.className = 'row degraded';
+    text += ' [degraded: Redis down]';
+  }
+  row.textContent = text;
+  if (resp.status === 429) {
+    const retry = Math.max(1, Math.round(json.retry_after_s || 1));
+    row.textContent += ' retry=' + retry + 's';
+    const timer = showBanner('Rate limited (429). Refill in ' + retry + 's…');
+    let left = retry;
+    const interval = setInterval(() => {
+      left -= 1;
+      timer.textContent = 'Rate limited (429). Refill in ' + Math.max(0, left) + 's…';
+      if (left <= 0) {
+        clearInterval(interval);
+        timer.textContent = 'Rate limited (429). Refilled — try again.';
+      }
+    }, 1000);
+  }
+  results.appendChild(row);
+}
+
+async function shortenOnce() {
+  const { resp, json } = await postShorten();
+  render(1, { resp, json });
+  await loadRecent();
+}
+
+document.getElementById('shorten').addEventListener('click', shortenOnce);
+
+document.getElementById('spam').addEventListener('click', async () => {
+  results.innerHTML = '';
+  banner.innerHTML = '';
+  const N = 30;
+  let counter = 0;
+  await Promise.all(Array.from({ length: N }, async () => {
+    const index = ++counter;
+    const r = await postShorten();
+    render(index, r);
+  }));
+  await loadRecent();
+});
+
+loadRecent();
+</script>
+</body>
+</html>
