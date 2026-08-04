@@ -68,7 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if status == 429:
             retry_after_raw = body.get("retry_after_s")
             retry_after_s = max(
-                1, int(retry_after_raw) if isinstance(retry_after_raw, (int, str)) else 1
+                1, int(float(retry_after_raw)) if isinstance(retry_after_raw, (int, str)) else 1
             )
             return JSONResponse(
                 status_code=429,

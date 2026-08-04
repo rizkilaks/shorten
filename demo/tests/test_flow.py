@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -8,11 +9,16 @@ from demo.main import create_app
 
 
 class StubLimiter:
-    def __init__(self, status: int = 200, body: dict | None = None) -> None:
+    def __init__(
+        self, status: int = 200, body: dict | None = None, exc: Exception | None = None
+    ) -> None:
         self._status = status
         self._body = body or {"allowed": True, "limit": 10, "remaining": 9, "reset_at": 0}
+        self._exc = exc
 
     async def check(self, *, rule_key: str, user_id: str | None) -> tuple[int, dict]:
+        if self._exc is not None:
+            raise self._exc
         return self._status, self._body
 
     async def aclose(self) -> None:
@@ -58,6 +64,19 @@ def test_shorten_throttled_passthrough(client: TestClient) -> None:
     assert r.status_code == 429
     assert r.headers["Retry-After"] == "3"
     assert r.json()["error"] == "rate_limited"
+
+
+def test_shorten_fails_open_when_limiter_unreachable(client: TestClient) -> None:
+    client.app.state.limiter = StubLimiter(exc=httpx.ConnectError("limiter down"))  # type: ignore[assignment]
+    r = client.post("/shorten", json={"url": "https://example.com/page", "user_id": "demo"})
+    assert r.status_code == 200
+    assert r.json()["short_code"]
+
+
+def test_shorten_502_when_limiter_5xx(client: TestClient) -> None:
+    client.app.state.limiter = StubLimiter(503, {"error": "boom"})  # type: ignore[assignment]
+    r = client.post("/shorten", json={"url": "https://example.com/page", "user_id": "demo"})
+    assert r.status_code == 502
 
 
 def test_recent_empty(client: TestClient) -> None:
