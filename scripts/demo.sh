@@ -13,7 +13,7 @@ curl -s -X POST "$BASE/shorten" -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com/1","user_id":"demo"}'
 echo
 
-echo "== 2. spam 15 writes (expect first ~10 -> 200, then 429) =="
+echo "== 2. spam 15 writes (expect ~9 -> 200, then 429) =="
 for i in $(seq 1 15); do
   code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/shorten" \
     -H 'Content-Type: application/json' -d "{\"url\":\"https://example.com/$i\",\"user_id\":\"demo\"}")

@@ -4,8 +4,8 @@
 # Install on the VPS crontab:  @daily /opt/linkshort/scripts/backup.sh
 set -euo pipefail
 
-DATA_DIR="${DATA_DIR:-/opt/linkshort/data}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/linkshort/backups}"
+DATA_DIR="${DATA_DIR:-/opt/linkshort/app/data}"
+BACKUP_DIR="${BACKUP_DIR:-/opt/linkshort/app/backups}"
 KEEP="${KEEP:-7}"
 
 mkdir -p "$BACKUP_DIR"
