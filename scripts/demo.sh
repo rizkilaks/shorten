@@ -3,6 +3,9 @@
 # Usage: ./scripts/demo.sh [base_url]   (default http://localhost:8080)
 set -euo pipefail
 
+# Always restore Redis, even if the demo dies mid-script.
+trap 'docker compose start redis' EXIT
+
 BASE="${1:-http://localhost:8080}"
 
 echo "== 1. shorten one URL (expect 200) =="
@@ -20,7 +23,7 @@ done
 echo "== 3. degraded mode: stop Redis, shorten again (expect 200 + X-RateLimit-Mode: degraded) =="
 docker compose stop redis
 curl -s -i -X POST "$BASE/shorten" -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/degraded","user_id":"demo"}' | grep -i -E "HTTP/|x-ratelimit-mode"
+  -d '{"url":"https://example.com/degraded","user_id":"demo"}' | grep -i "x-ratelimit-mode: degraded"
 docker compose start redis
 
 echo "== 4. after Redis restart, bucket refills (expect 200) =="
