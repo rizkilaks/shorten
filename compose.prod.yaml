@@ -1,0 +1,39 @@
+# Production override: `docker compose -f compose.yaml -f compose.prod.yaml up -d`
+# Requires .env with DOMAIN=s.<me>.duckdns.org (A record → VPS IP).
+services:
+  redis:
+    ports: !reset []
+
+  limiter:
+    ports: !reset []
+    restart: unless-stopped
+
+  demo:
+    ports: !reset []
+    restart: unless-stopped
+    environment:
+      DEMO_LIMITER_URL: http://limiter:8000
+      DEMO_BASE_URL: https://${DOMAIN}
+      DEMO_DB_PATH: /data/links.db
+    volumes:
+      - ./data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      demo:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
