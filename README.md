@@ -48,10 +48,11 @@ decision, not an accounting ledger**. Links live in SQLite (WAL) and persist acr
 | rule_key   | burst | sustained | applies to                    |
 |------------|-------|-----------|-------------------------------|
 | `write_free` | 10  | 20/min    | POST /shorten (user)          |
-| `read_free`  | 100 | 300/min   | GET /{code} (user)            |
 | `ip_write`   | 30  | 60/min    | POST /shorten (anonymous)     |
 
 Always `X-RateLimit-Limit / Remaining / Reset`; over budget → **429** + `Retry-After` (seconds).
+(`read_free` is defined in config for future redirects, but reads aren't rate-limited yet — wiring
+`GET /{code}` through the limiter is the next increment.)
 
 Shortener: `POST /shorten`, `GET /{code}` (301 + hit count), `GET /recent`, `GET /v1/health`.
 
@@ -66,13 +67,13 @@ files. CI: `ruff` → `mypy` → `pytest` (Redis service) → compose build + sm
 
 Target: a single VPS (2 vCPU / 2GB / 40GB — ~8-10× headroom). Costs $0 beyond the VPS.
 
-1. **DNS (free):** create a DuckDNS subdomain `s.<me>.duckdns.org` → A record = VPS IP. Verify `nslookup s.<me>.duckdns.org`.
-2. **Docker on the VPS:** `sudo apt install -y docker.io docker-compose-v2 sqlite3`.
+1. **DNS (free):** create a DuckDNS subdomain `s.<me>.duckdns.org` → A record = VPS IP. Verify `nslookup s.<me>.duckdns.org`. Give DNS a few minutes to propagate before the first TLS handshake.
+2. **Docker on the VPS:** `sudo apt install -y docker.io docker-compose-v2 sqlite3` and add yourself to the docker group (`sudo usermod -aG docker $USER`, then log out/in).
 3. **App:** clone the repo to `/opt/linkshort/app`, `cp .env.example .env`, set `DOMAIN`.
-4. **Data dir ownership:** `sudo mkdir -p /opt/linkshort/data /opt/linkshort/backups && sudo chown 1000:1000 /opt/linkshort/data /opt/linkshort/backups` — the container runs as uid 1000 and must own the bind-mounted data dir, or SQLite can't be written.
+4. **Data dir ownership:** `sudo mkdir -p /opt/linkshort/app/data /opt/linkshort/app/backups && sudo chown 1000:1000 /opt/linkshort/app/data /opt/linkshort/app/backups` — compose mounts `./data` (i.e. `/opt/linkshort/app/data`), and the container runs as uid 1000, so it must own the directory or SQLite can't be written.
 5. **Firewall:** `sudo ufw allow 80,443/tcp` (also open 80/443 in the provider panel).
-6. **Launch:** `docker compose -f compose.yaml -f compose.prod.yaml up -d --build`.
-7. **Backups:** `crontab -e` → `@daily /opt/linkshort/app/scripts/backup.sh` (keeps 7 tarballs). Test once: `DATA_DIR=/opt/linkshort/data BACKUP_DIR=/opt/linkshort/backups bash /opt/linkshort/app/scripts/backup.sh`.
+6. **Launch:** `docker compose -f compose.yaml -f compose.prod.yaml up -d --build`. Caddy fetches the TLS cert lazily — the first `https://` load may take ~10-30s while it obtains and installs it. Diagnose with `docker compose logs caddy`.
+7. **Backups:** `crontab -e` → `@daily /opt/linkshort/app/scripts/backup.sh` (keeps 7 tarballs). Test once now: `bash /opt/linkshort/app/scripts/backup.sh`.
 
 Only Caddy is public; `limiter` + `redis` are internal-only; SQLite lives on a mounted volume;
 `restart: unless-stopped`. HTTPS comes from Let's Encrypt, renewed automatically by Caddy.
@@ -97,9 +98,11 @@ Only Caddy is public; `limiter` + `redis` are internal-only; SQLite lives on a m
 ## Scale
 
 Design envelope: 5k writes/day (peak 60/min), 50k reads/day (peak 600/min), ~1-3k DAU — enough to
-make storage/limits choices concrete. These are **design inputs, not a load claim**: one host serves
-~1,000-2,000 RPS end-to-end (each check = one Lua round-trip; Redis does 50k+ ops/s), ~100× the
-envelope. "The interesting work was making the decision correct, not fast."
+make storage/limits choices concrete. These are **design inputs, not a load claim**; throughput is
+**not load-tested**. The limiter itself is cheap (one Lua round-trip in Redis), but the shortener's
+redirect path opens a fresh SQLite connection per request, so end-to-end throughput is dominated by
+SQLite — comfortably more than the envelope, but I won't quote an RPS number I haven't measured.
+"The interesting work was making the decision correct, not fast."
 
 What I'd change at scale: sidecar/library limiter per host; shard Redis by user hash; hit counters
 in Redis + async flush; Postgres at ~10M rows; Prometheus metrics + throttle-rate alerts; the IANA
