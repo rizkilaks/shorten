@@ -29,6 +29,8 @@ jobs:
         run: docker compose build
       - name: Compose smoke test
         run: |
+          # Free host port 6379: remove the job's redis service container before
+          # compose starts its own redis (both are redis:7-alpine).
           docker ps -aq --filter "ancestor=redis:7-alpine" | xargs -r docker rm -f
           docker compose up -d
           for i in $(seq 1 30); do
