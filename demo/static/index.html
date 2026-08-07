@@ -15,6 +15,10 @@
   .limited { color: #b35900; }
   .degraded { color: #9a6700; }
   .banner { background: #fff8c5; border: 1px solid #d4a72c; padding: 0.5rem; margin: 0.5rem 0; }
+  #bucket { display: flex; gap: 4px; margin: 0.75rem 0 0.25rem; flex-wrap: wrap; }
+  .token { width: 22px; height: 22px; border-radius: 4px; background: #eaeef2; border: 1px solid #d0d7de; transition: background 0.15s ease; }
+  .token.filled { background: #1a7f37; border-color: #1a7f37; }
+  #bucket-meta { color: #57606a; font-size: 0.85rem; margin-bottom: 0.75rem; }
   li { margin: 0.25rem 0; }
   a { word-break: break-all; }
   .hits { color: #57606a; font-size: 0.85rem; }
@@ -22,13 +26,15 @@
 </head>
 <body>
   <h1>shortener + rate limiter</h1>
-  <p>Shorten a URL. Hit <strong>Spam</strong> to watch 200s turn into a 429 banner as the token bucket empties, then recover (~3s per token).</p>
+  <p>Shorten a URL. Hit <strong>Spam</strong> to watch the token bucket drain (200s) into a wall of 429s, then refill (~3s per token).</p>
   <div id="controls">
     <input id="url" type="url" placeholder="https://example.com/page">
     <input id="user" value="demo" title="user id (X-User-Id)">
     <button id="shorten">Shorten</button>
     <button id="spam">Spam (30x)</button>
   </div>
+  <div id="bucket"></div>
+  <div id="bucket-meta">tokens: <span id="bucket-count">-</span> / <span id="bucket-capacity">-</span></div>
   <div id="banner"></div>
   <div id="results"></div>
   <h2>Recent links</h2>
@@ -40,6 +46,55 @@ const userInput = document.getElementById('user');
 const banner = document.getElementById('banner');
 const results = document.getElementById('results');
 const linksEl = document.getElementById('links');
+const bucketEl = document.getElementById('bucket');
+const bucketCount = document.getElementById('bucket-count');
+const bucketCapacity = document.getElementById('bucket-capacity');
+
+let bucket = { capacity: 10, remaining: 10, target: 10, t0: 0, t1: 0, tokens: [] };
+
+function buildBucket(capacity) {
+  bucketEl.innerHTML = '';
+  bucket.tokens = [];
+  for (let i = 0; i < capacity; i++) {
+    const t = document.createElement('div');
+    t.className = 'token';
+    bucketEl.appendChild(t);
+    bucket.tokens.push(t);
+  }
+  bucket.capacity = capacity;
+  bucketCapacity.textContent = capacity;
+}
+
+function renderBucket() {
+  let filled = bucket.remaining;
+  if (bucket.t1 > bucket.t0) {
+    const frac = Math.min(1, Math.max(0, (Date.now() / 1000 - bucket.t0) / (bucket.t1 - bucket.t0)));
+    filled = Math.round(bucket.remaining + (bucket.target - bucket.remaining) * frac);
+  }
+  filled = Math.max(0, Math.min(bucket.capacity, filled));
+  bucket.tokens.forEach((t, i) => t.classList.toggle('filled', i < filled));
+  bucketCount.textContent = filled;
+}
+
+function setBucket(remaining, capacity, resetAtSec) {
+  if (capacity !== bucket.capacity) buildBucket(capacity);
+  bucket.remaining = remaining;
+  bucket.target = capacity;
+  bucket.t0 = Date.now() / 1000;
+  bucket.t1 = resetAtSec || 0;
+  renderBucket();
+}
+
+function onDenied(retryAfterSec, capacity) {
+  if (capacity !== bucket.capacity) buildBucket(capacity);
+  bucket.remaining = 0;
+  bucket.target = 1;
+  bucket.t0 = Date.now() / 1000;
+  bucket.t1 = bucket.t0 + retryAfterSec;
+  renderBucket();
+}
+
+setInterval(renderBucket, 200);
 
 async function postShorten() {
   const body = { url: urlInput.value, user_id: userInput.value || null };
@@ -79,20 +134,29 @@ function showBanner(text) {
   return el;
 }
 
-function render(index, { resp, json }) {
-  const row = document.createElement('div');
-  row.className = 'row ' + (resp.ok ? 'ok' : 'limited');
-  const remaining = resp.headers.get('X-RateLimit-Remaining');
-  const mode = resp.headers.get('X-RateLimit-Mode');
-  let text = '#' + index + ' ' + resp.status + ' remaining=' + (remaining ?? '-');
-  if (mode === 'degraded') {
-    row.className = 'row degraded';
-    text += ' [degraded: Redis down]';
+function createLogRows(n) {
+  results.innerHTML = '';
+  for (let i = 1; i <= n; i++) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.id = 'log-' + i;
+    row.textContent = '#' + i + ' …';
+    results.appendChild(row);
   }
-  row.textContent = text;
-  if (resp.status === 429) {
-    const retry = Math.max(1, Math.round(json.retry_after_s || 1));
-    row.textContent += ' retry=' + retry + 's';
+}
+
+function applyResult(index, { resp, json }) {
+  const limit = parseInt(resp.headers.get('X-RateLimit-Limit') ?? '10', 10);
+  const remaining = resp.headers.get('X-RateLimit-Remaining');
+  const reset = resp.headers.get('X-RateLimit-Reset');
+  const mode = resp.headers.get('X-RateLimit-Mode');
+  let retry = 0;
+
+  if (resp.ok) {
+    if (reset) setBucket(parseInt(remaining ?? '0', 10), limit, parseInt(reset, 10));
+  } else if (resp.status === 429) {
+    retry = Math.max(1, Math.round(json.retry_after_s || 1));
+    onDenied(retry, limit);
     const timer = showBanner('Rate limited (429). Refill in ' + retry + 's…');
     let left = retry;
     const interval = setInterval(() => {
@@ -104,30 +168,42 @@ function render(index, { resp, json }) {
       }
     }, 1000);
   }
-  results.appendChild(row);
+
+  const row = document.getElementById('log-' + index);
+  if (row) {
+    row.className = 'row ' + (resp.ok ? 'ok' : 'limited');
+    let text = '#' + index + ' ' + resp.status + ' remaining=' + (remaining ?? '-');
+    if (mode === 'degraded') {
+      row.className = 'row degraded';
+      text += ' [degraded: Redis down]';
+    }
+    if (resp.status === 429) text += ' retry=' + retry + 's';
+    row.textContent = text;
+  }
 }
 
 async function shortenOnce() {
-  const { resp, json } = await postShorten();
-  render(1, { resp, json });
+  createLogRows(1);
+  const r = await postShorten();
+  applyResult(1, r);
   await loadRecent();
 }
 
 document.getElementById('shorten').addEventListener('click', shortenOnce);
 
 document.getElementById('spam').addEventListener('click', async () => {
-  results.innerHTML = '';
   banner.innerHTML = '';
-  const N = 30;
+  createLogRows(30);
   let counter = 0;
-  await Promise.all(Array.from({ length: N }, async () => {
+  await Promise.all(Array.from({ length: 30 }, async () => {
     const index = ++counter;
     const r = await postShorten();
-    render(index, r);
+    applyResult(index, r);
   }));
   await loadRecent();
 });
 
+buildBucket(10);
 loadRecent();
 </script>
 </body>
