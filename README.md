@@ -73,6 +73,21 @@ A production override adds Caddy (automatic HTTPS), keeps the limiter and Redis 
 network with only Caddy public, persists SQLite on a volume, and includes a nightly backup
 (`scripts/backup.sh`).
 
+### Continuous deployment
+
+Every merge to `main` deploys automatically: the `Deploy` workflow SSHes into the VPS (with a
+locked deploy key) and runs `scripts/ssh-deploy.sh` (`git pull --ff-only` + `docker compose
+-f compose.yaml -f compose.prod.yaml up -d --build`), then smoke-checks the public health endpoint.
+
+Server-side setup (done once):
+- Create `/opt/linkshort/app/scripts/ssh-deploy.sh` (it is version-controlled in this repo; the
+  first deploy also pulls it into place) and `chmod +x` it.
+- Lock the deploy key so it can only run that script — in the VPS's `~/.ssh/authorized_keys`:
+  ```
+  command="/opt/linkshort/app/scripts/ssh-deploy.sh",restrict ssh-ed25519 AAAA...  github-actions-deploy
+  ```
+- The private half of the key lives only as the `VPS_SSH_KEY` GitHub Actions secret.
+
 ## License
 
 MIT
