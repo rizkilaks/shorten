@@ -1,0 +1,26 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Pin VPS host key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' '43.134.104.216 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIELZn+19PaND7kXpdlETDmUw6xivzfy/jgiWIKt4X3k7' >> ~/.ssh/known_hosts
+      - name: Deploy to VPS
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o LogLevel=ERROR ubuntu@43.134.104.216 true
+          rm -f ~/.ssh/deploy_key
+      - name: Smoke check
+        run: curl -sf https://rlshorten.duckdns.org/v1/health
